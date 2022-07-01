@@ -4,6 +4,12 @@ import os.path as osp
 import time
 import cv2
 import torch
+import pdb
+
+import sys
+import numpy as np
+import pyzed.sl as sl
+import time
 
 from loguru import logger
 
@@ -14,10 +20,95 @@ from yolox.utils.visualize import plot_tracking
 from trackers.ocsort_tracker.ocsort import OCSort
 from trackers.tracking_utils.timer import Timer
 
+from threading import Lock, Thread
 
+# depthcamera 구동시 cudnn 에러로 인한 추가, depthcamera 사용 안할시 지우기
+# torch.backends.cudnn.enabled = False
 IMAGE_EXT = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
 
 from utils.args import make_parser
+
+exit_signal = False
+new_data = False
+
+lock = Lock()
+width = 704
+height = 416
+confidence = 0.35
+
+def load_image_into_numpy_array(image):
+    ar = image.get_data()
+    ar = ar[:, :, 0:3]
+    (im_height, im_width, channels) = image.get_data().shape
+    return np.array(ar).reshape((im_height, im_width, 3)).astype(np.uint8)
+
+
+def load_depth_into_numpy_array(depth):
+    ar = depth.get_data()
+    ar = ar[:, :, 0:4]
+    (im_height, im_width, channels) = depth.get_data().shape
+    return np.array(ar).reshape((im_height, im_width, channels)).astype(np.float32)
+
+
+image_np_global = np.zeros([width, height, 3], dtype=np.uint8)
+depth_np_global = np.zeros([width, height, 4], dtype=np.float)
+
+# ZED image capture thread function (zed cuda 분리를 위한 thread 생성, 안하면 pythorch와 cuda context 차이로 cuda error 생김)
+def capture_thread_func(svo_filepath=None):
+    global image_np_global, depth_np_global, exit_signal, new_data, point_cloud
+    get_cloud = True
+    zed = sl.Camera()
+
+    # Create a InitParameters object and set configuration parameters
+    input_type = sl.InputType()
+    if svo_filepath is not None:
+        input_type.set_from_svo_file(svo_filepath)
+
+    init = sl.InitParameters(input_t=input_type)
+    init.camera_resolution = sl.RESOLUTION.HD720
+    init.camera_fps = 30
+    init.depth_mode = sl.DEPTH_MODE.PERFORMANCE
+    init.coordinate_units = sl.UNIT.MILLIMETER
+    init.svo_real_time_mode = False
+
+
+    # Open the camera
+    err = zed.open(init)
+    while err != sl.ERROR_CODE.SUCCESS:
+        err = zed.open(init)
+        print(err)
+        exit(1)
+    """
+    image_mat = sl.Mat()
+    depth_mat = sl.Mat()
+    """
+    runtime = sl.RuntimeParameters()
+    runtime.sensing_mode = sl.SENSING_MODE.STANDARD
+    
+    image_size = zed.get_camera_information().camera_resolution
+    image_size.width = image_size.width /2
+    image_size.height = image_size.height /2
+    
+    image_zed = sl.Mat(image_size.width, image_size.height, sl.MAT_TYPE.U8_C4)
+    depth_image_zed = sl.Mat(image_size.width, image_size.height, sl.MAT_TYPE.U8_C4)
+    point_cloud = sl.Mat()
+    
+
+    while not exit_signal:
+        if zed.grab(runtime) == sl.ERROR_CODE.SUCCESS:
+            zed.retrieve_image(image_zed, sl.VIEW.LEFT, resolution=image_size)
+            zed.retrieve_measure(depth_image_zed, sl.MEASURE.XYZRGBA, resolution=image_size)
+            lock.acquire()
+            image_np_global = load_image_into_numpy_array(image_zed)
+            depth_np_global = load_depth_into_numpy_array(depth_image_zed)
+            if get_cloud:
+                zed.retrieve_measure(point_cloud, sl.MEASURE.XYZRGBA, sl.MEM.CPU, image_size)
+            new_data = True
+            lock.release()
+
+        time.sleep(0.01)
+
+    zed.close()
 
 def get_image_list(path):
     image_names = []
@@ -46,17 +137,27 @@ class Predictor(object):
         self.confthre = exp.test_conf
         self.nmsthre = exp.nmsthre
         self.test_size = exp.test_size
+        # depth image 차원을 맞추기 위해 추가
+        #self.test_size = (1920, 1080)
         self.device = device
         self.fp16 = fp16
+        
         if trt_file is not None:
             from torch2trt import TRTModule
+            
+            x = torch.ones((1, 3, exp.test_size[0], exp.test_size[1]), device=device)
+            self.model(x)
+            
+            #self.model = 0
+            #time.sleep(5)
+            
 
             model_trt = TRTModule()
             model_trt.load_state_dict(torch.load(trt_file))
 
-            x = torch.ones((1, 3, exp.test_size[0], exp.test_size[1]), device=device)
-            self.model(x)
+            
             self.model = model_trt
+            
         self.rgb_means = (0.485, 0.456, 0.406)
         self.std = (0.229, 0.224, 0.225)
 
@@ -75,6 +176,7 @@ class Predictor(object):
 
         img, ratio = preproc(img, self.test_size, self.rgb_means, self.std)
         img_info["ratio"] = ratio
+        
         img = torch.from_numpy(img).unsqueeze(0).float().to(self.device)
         if self.fp16:
             img = img.half()  # to FP16
@@ -83,7 +185,9 @@ class Predictor(object):
             timer.tic()
             outputs = self.model(img)
             if self.decoder is not None:
+                #pdb.set_trace()
                 outputs = self.decoder(outputs, dtype=outputs.type())
+                
             outputs = postprocess(
                 outputs, self.num_classes, self.confthre, self.nmsthre
             )
@@ -169,6 +273,7 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
         if frame_id % 20 == 0:
             logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
         ret_val, frame = cap.read()
+        #pdb.set_trace()
         if ret_val:
             outputs, img_info = predictor.inference(frame, timer)
             if outputs[0] is not None:
@@ -194,6 +299,7 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
                 online_im = img_info['raw_img']
             if args.save_result:
                 vid_writer.write(online_im)
+            cv2.imshow("image", online_im)
             ch = cv2.waitKey(1)
             if ch == 27 or ch == ord("q") or ch == ord("Q"):
                 break
@@ -207,7 +313,70 @@ def imageflow_demo(predictor, vis_folder, current_time, args):
             f.writelines(results)
         logger.info(f"save results to {res_file}")
 
+def depthflow_demo(predictor, vis_folder, current_time, args):
+    global image_np_global, depth_np_global, new_data, exit_signal, point_cloud
+    # 타임스텝 및 세이브 폴더
+    timestamp = time.strftime("%Y_%m_%d_%H_%M_%S", current_time)
+    save_folder = osp.join(vis_folder, timestamp)
+    os.makedirs(save_folder, exist_ok=True)
+    
+    tracker = OCSort(det_thresh=args.track_thresh, iou_threshold=args.iou_thresh, use_byte=args.use_byte)
+    timer = Timer()
+    frame_id = 0
+    results = []
+    
+    # Start the capture thread with the ZED input
+    capture_thread = Thread(target=capture_thread_func)
+    capture_thread.start()
 
+    key = ' '
+    prevTime = 0
+    while key != 113 :
+        
+        if frame_id % 20 == 0:
+            logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
+        
+        curTime = time.time()
+        fps = int(1./(curTime - prevTime))
+        if new_data:
+            lock.acquire()
+            image_ocv = np.copy(image_np_global)
+            depth_image_zed = np.copy(depth_np_global)
+            new_data = False
+            lock.release()
+            
+            outputs, img_info = predictor.inference(image_ocv, timer)
+            if outputs[0] is not None:
+                online_targets = tracker.update(outputs[0], [img_info['height'], img_info['width']], exp.test_size)
+                online_tlwhs = []
+                online_ids = []
+                for t in online_targets:
+                    tlwh = [t[0], t[1], t[2] - t[0], t[3] - t[1]]
+                    tid = t[4]
+                    vertical = tlwh[2] / tlwh[3] > args.aspect_ratio_thresh
+                    if tlwh[2] * tlwh[3] > args.min_box_area and not vertical:
+                        online_tlwhs.append(tlwh)
+                        online_ids.append(tid)
+                        results.append(
+                            f"{frame_id},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},1.0,-1,-1,-1\n"
+                        )
+                timer.toc()
+                online_im = plot_tracking(
+                    img_info['raw_img'], point_cloud, online_tlwhs, online_ids, frame_id=frame_id + 1, fps=1. / timer.average_time
+                )
+            else:
+                timer.toc()
+                online_im = img_info['raw_img']
+        else:
+            online_im = image_np_global
+            #time.sleep(0.01)
+            
+        cv2.imshow("image", online_im)
+        key = cv2.waitKey(10)
+    cv2.destroyAllWindows()
+    capture_thread.join()
+    print("\nFINISH")
+            
 def main(exp, args):
     if not args.expn:
         args.expn = exp.exp_name
@@ -266,13 +435,16 @@ def main(exp, args):
     else:
         trt_file = None
         decoder = None
-
     predictor = Predictor(model, exp, trt_file, decoder, args.device, args.fp16)
     current_time = time.localtime()
     if args.demo_type == "image":
         image_demo(predictor, vis_folder, current_time, args)
     elif args.demo_type == "video" or args.demo_type == "webcam":
         imageflow_demo(predictor, vis_folder, current_time, args)
+    elif args.demo_type == "depthcam":
+        depthflow_demo(predictor, vis_folder, current_time, args)
+    
+    
 
 
 if __name__ == "__main__":

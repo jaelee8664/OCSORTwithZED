@@ -64,9 +64,10 @@ def postprocess(prediction, num_classes, conf_thre=0.7, nms_thre=0.45):
                 detections[:, :4],
                 detections[:, 4] * detections[:, 5],
                 detections[:, 6],
-                nms_thre,
+                nms_thre
             )
         except:
+            #print("pdb should be uploaded")
             import pdb; pdb.set_trace()
         detections = detections[nms_out_index]
         if output[i] is None:

@@ -3,7 +3,7 @@
 # Copyright (c) 2014-2021 Megvii Inc. All rights reserved.
 
 from loguru import logger
-
+import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,7 +35,8 @@ class YOLOXHead(nn.Module):
 
         self.n_anchors = 1
         self.num_classes = num_classes
-        self.decode_in_inference = True  # for deploy, set to False
+        # TRT 적용하면 False
+        self.decode_in_inference = False  # for deploy, set to False
 
         self.cls_convs = nn.ModuleList()
         self.reg_convs = nn.ModuleList()
@@ -205,11 +206,13 @@ class YOLOXHead(nn.Module):
                 dtype=xin[0].dtype,
             )
         else:
+            
             self.hw = [x.shape[-2:] for x in outputs]
             # [batch, n_anchors_all, 85]
             outputs = torch.cat(
                 [x.flatten(start_dim=2) for x in outputs], dim=2
             ).permute(0, 2, 1)
+            #pdb.set_trace()
             if self.decode_in_inference:
                 return self.decode_outputs(outputs, dtype=xin[0].type())
             else:

@@ -10,6 +10,7 @@ import argparse
 import os
 import shutil
 
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 def make_parser():
     parser = argparse.ArgumentParser("YOLOX ncnn deploy")
