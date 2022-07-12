@@ -22,21 +22,26 @@ from trackers.tracking_utils.timer import Timer
 
 from threading import Lock, Thread
 
-# depthcamera 구동시 cudnn 에러로 인한 추가, depthcamera 사용 안할시 지우기
-# torch.backends.cudnn.enabled = False
 IMAGE_EXT = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
 
 from utils.args import make_parser
 
+# zedcamera thread signal
 exit_signal = False
 new_data = False
 
+# Tread lock intialize
 lock = Lock()
-width = 704
-height = 416
-confidence = 0.35
 
 def load_image_into_numpy_array(image):
+    """_summary_
+
+    Args:
+        image (zedAPI image): image made from zedAPI
+
+    Returns:
+        numpy array: numpy image
+    """
     ar = image.get_data()
     ar = ar[:, :, 0:3]
     (im_height, im_width, channels) = image.get_data().shape
@@ -44,12 +49,25 @@ def load_image_into_numpy_array(image):
 
 
 def load_depth_into_numpy_array(depth):
+    """_summary_
+
+    Args:
+        depth image (zedAPI image): depth image made from zedAPI
+
+    Returns:
+        numpy array: numpy depth image
+    """
     ar = depth.get_data()
     ar = ar[:, :, 0:4]
     (im_height, im_width, channels) = depth.get_data().shape
     return np.array(ar).reshape((im_height, im_width, channels)).astype(np.float32)
 
+# zed image output size
+width = 704
+height = 416
+confidence = 0.35
 
+# make dummy image to contain zed images
 image_np_global = np.zeros([width, height, 3], dtype=np.uint8)
 depth_np_global = np.zeros([width, height, 4], dtype=np.float)
 
@@ -110,6 +128,7 @@ def capture_thread_func(svo_filepath=None):
 
     zed.close()
 
+# image 파일이 데이터 셋일경우 리스트로 만들어주는 함수
 def get_image_list(path):
     image_names = []
     for maindir, subdir, file_name_list in os.walk(path):
@@ -137,25 +156,15 @@ class Predictor(object):
         self.confthre = exp.test_conf
         self.nmsthre = exp.nmsthre
         self.test_size = exp.test_size
-        # depth image 차원을 맞추기 위해 추가
-        #self.test_size = (1920, 1080)
+        #self.test_size = (1920, 1080) 테스트 파일 이미지 크기는 yolox/data/data_augment.py의 preproc 함수를 통해서 만들어짐
         self.device = device
         self.fp16 = fp16
         
         if trt_file is not None:
             from torch2trt import TRTModule
-            
-            x = torch.ones((1, 3, exp.test_size[0], exp.test_size[1]), device=device)
-            self.model(x)
-            
-            #self.model = 0
-            #time.sleep(5)
-            
 
             model_trt = TRTModule()
-            model_trt.load_state_dict(torch.load(trt_file))
-
-            
+            model_trt.load_state_dict(torch.load(trt_file))   
             self.model = model_trt
             
         self.rgb_means = (0.485, 0.456, 0.406)
@@ -180,6 +189,7 @@ class Predictor(object):
         img = torch.from_numpy(img).unsqueeze(0).float().to(self.device)
         if self.fp16:
             img = img.half()  # to FP16
+
 
         with torch.no_grad():
             timer.tic()
@@ -220,9 +230,9 @@ def image_demo(predictor, vis_folder, current_time, args):
                     results.append(
                         f"{frame_id},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},1.0,-1,-1,-1\n"
                     )
-            timer.toc()
+            # timer.toc()
             online_im = plot_tracking(
-                img_info['raw_img'], online_tlwhs, online_ids, frame_id=frame_id, fps=1. / timer.average_time
+                img_info['raw_img'], online_tlwhs, online_ids, frame_id=frame_id, fps=1. / timer.toc()
             )
         else:
             timer.toc()
@@ -326,18 +336,18 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
     results = []
     
     # Start the capture thread with the ZED input
-    capture_thread = Thread(target=capture_thread_func)
+    capture_thread = Thread(target=capture_thread_func, daemon=True)
     capture_thread.start()
 
     key = ' '
     prevTime = 0
     while key != 113 :
-        
+        # frame 분석 로거
+        """
         if frame_id % 20 == 0:
             logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
+        """
         
-        curTime = time.time()
-        fps = int(1./(curTime - prevTime))
         if new_data:
             lock.acquire()
             image_ocv = np.copy(image_np_global)
@@ -360,9 +370,9 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
                         results.append(
                             f"{frame_id},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},1.0,-1,-1,-1\n"
                         )
-                timer.toc()
+                # timer.toc()
                 online_im = plot_tracking(
-                    img_info['raw_img'], point_cloud, online_tlwhs, online_ids, frame_id=frame_id + 1, fps=1. / timer.average_time
+                    img_info['raw_img'], point_cloud, online_tlwhs, online_ids, frame_id=frame_id + 1, fps=fps
                 )
             else:
                 timer.toc()
@@ -370,11 +380,13 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
         else:
             online_im = image_np_global
             #time.sleep(0.01)
-            
+        curTime = time.time()
+        fps = int(1./(curTime - prevTime))
+        prevTime = curTime
         cv2.imshow("image", online_im)
         key = cv2.waitKey(10)
     cv2.destroyAllWindows()
-    capture_thread.join()
+    # capture_thread.join()
     print("\nFINISH")
             
 def main(exp, args):
@@ -404,6 +416,13 @@ def main(exp, args):
     model = exp.get_model().to(args.device)
     logger.info("Model Summary: {}".format(get_model_info(model, exp.test_size)))
     model.eval()
+    
+    # 여기에 model 초기화를 하니 trt 모델이 돌아갔습니다... 수정필요
+    if args.trt:
+        x = torch.ones((1, 3, 800, 1440), device="cuda")
+        model(x)
+    # print("=======================")
+    # print(model.head.hw)
 
     if not args.trt:
         if args.ckpt is None:
