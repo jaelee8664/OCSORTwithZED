@@ -326,15 +326,6 @@ def main(exp, args):
     model = predictor.model
     model.eval()
     
-    """
-    # 여기에 model 초기화를 하니 trt 모델이 돌아갔습니다... 수정필요
-    if args.trt:
-        x = torch.ones((1, 3, 800, 1440), device="cuda")
-        model(x)
-    # print("=======================")
-    # print(model.head.hw)
-    """
-
     if not args.trt:
         if args.ckpt is None:
             ckpt_file = osp.join(output_dir, "best_ckpt.pth.tar")
