@@ -10,7 +10,7 @@ import sys
 import numpy as np
 import pyzed.sl as sl
 import time
-
+from collections import OrderedDict
 from loguru import logger
 
 from yolox.data.data_augment import preproc
@@ -430,8 +430,8 @@ def main(exp, args):
         else:
             ckpt_file = args.ckpt
         logger.info("loading checkpoint")
+   
         ckpt = torch.load(ckpt_file, map_location="cpu")
-        # load the model state dict
         model.load_state_dict(ckpt["model"])
         logger.info("loaded checkpoint done.")
 

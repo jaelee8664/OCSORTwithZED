@@ -105,8 +105,8 @@ def capture_thread_func(svo_filepath=None):
     runtime.sensing_mode = sl.SENSING_MODE.STANDARD
     
     image_size = zed.get_camera_information().camera_resolution
-    image_size.width = image_size.width /2
-    image_size.height = image_size.height /2
+    # image_size.width = image_size.width/2
+    # image_size.height = image_size.height/2
     
     image_zed = sl.Mat(image_size.width, image_size.height, sl.MAT_TYPE.U8_C4)
     depth_image_zed = sl.Mat(image_size.width, image_size.height, sl.MAT_TYPE.U8_C4)
@@ -120,6 +120,7 @@ def capture_thread_func(svo_filepath=None):
             lock.acquire()
             image_np_global = load_image_into_numpy_array(image_zed)
             depth_np_global = load_depth_into_numpy_array(depth_image_zed)
+            #print("np global", image_np_global.shape)
             if get_cloud:
                 zed.retrieve_measure(point_cloud, sl.MEASURE.XYZRGBA, sl.MEM.CPU, image_size)
             new_data = True
@@ -162,8 +163,10 @@ class Predictor(object):
         else:
             self.model = exp.get_model().to(args.device)
             
-        self.rgb_means = (0.485, 0.456, 0.406)
-        self.std = (0.229, 0.224, 0.225)
+        #self.rgb_means = (0.485, 0.456, 0.406)
+        #self.std = (0.229, 0.224, 0.225)
+        self.rgb_means = None
+        self.std = None
 
     # yolox decoder function. If you use TRT module, this decoder should be implemented separately
     def decode_outputs(self, outputs, dtype):
@@ -193,10 +196,11 @@ class Predictor(object):
             img_info["file_name"] = None
 
         height, width = img.shape[:2]
+        #print(f"height {height} width {width}")
         img_info["height"] = height
         img_info["width"] = width
         img_info["raw_img"] = img
-
+        preproc_start = time.time()
         img, ratio = preproc(img, self.test_size, self.rgb_means, self.std)
         img_info["ratio"] = ratio
         
@@ -204,17 +208,21 @@ class Predictor(object):
         if self.fp16:
             img = img.half()  # to FP16
 
-
+        preproc_time = time.time() - preproc_start
         with torch.no_grad():
             timer.tic()
+            mdl_start = time.time()
             outputs = self.model(img)
             if args.trt:
                 self.decoder = self.decode_outputs
                 outputs = self.decoder(outputs, dtype=outputs.type())
-                
+            mdl_time = time.time() - mdl_start
+            pos_start = time.time()
             outputs = postprocess(
                 outputs, self.num_classes, self.confthre, self.nmsthre
             )
+            pos_time = time.time() - pos_start
+            print(f"preprocess time : {preproc_time} model time : {mdl_time} postprocess time : {pos_time}")
         return outputs, img_info
     
 def depthflow_demo(predictor, vis_folder, current_time, args):
@@ -241,15 +249,19 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
         if frame_id % 20 == 0:
             logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
         """
-        
+        img_time = pred_time = oc_time = 0
         if new_data:
+            img_start = time.time()
             lock.acquire()
             image_ocv = np.copy(image_np_global)
             depth_image_zed = np.copy(depth_np_global)
             new_data = False
             lock.release()
-            
+            img_time = time.time() - img_start
+            pred_start = time.time()
             outputs, img_info = predictor.inference(image_ocv, timer)
+            pred_time = time.time() - pred_start
+            oc_start = time.time()
             if outputs[0] is not None:
                 online_targets = tracker.update(outputs[0], [img_info['height'], img_info['width']], exp.test_size)
                 online_tlwhs = []
@@ -271,9 +283,11 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
             else:
                 timer.toc()
                 online_im = img_info['raw_img']
+            oc_time = time.time() - oc_start
         else:
             online_im = image_np_global
             #time.sleep(0.01)
+        #print(f'img_time : {img_time} pred_time : {pred_time} oc_time : {oc_time}')
         curTime = time.time()
         fps = int(1./(curTime - prevTime))
         prevTime = curTime
