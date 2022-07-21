@@ -303,6 +303,7 @@ class Trainer:
         if self.rank == 0:
             self.tblogger.add_scalar("val/COCOAP50", ap50, self.epoch + 1)
             self.tblogger.add_scalar("val/COCOAP50_95", ap50_95, self.epoch + 1)
+            print(f"{ap50}, {ap50_95}")
             logger.info("\n" + summary)
         synchronize()
 

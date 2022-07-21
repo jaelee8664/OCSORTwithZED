@@ -50,7 +50,9 @@ def get_color(idx):
 
 
 def plot_tracking(image, point_cloud, tlwhs, obj_ids, scores=None, frame_id=0, fps=0., ids2=None):
-    im = np.ascontiguousarray(np.copy(image))
+    # 이미 preproc에서 하므로 필요 없음
+    #im = np.ascontiguousarray(np.copy(image))
+    im = image
     im_h, im_w = im.shape[:2]
 
     top_view = np.zeros([im_w, im_w, 3], dtype=np.uint8) + 255
@@ -69,15 +71,33 @@ def plot_tracking(image, point_cloud, tlwhs, obj_ids, scores=None, frame_id=0, f
     for i, tlwh in enumerate(tlwhs):
         x1, y1, w, h = tlwh
         intbox = tuple(map(int, (x1, y1, x1 + w, y1 + h)))
+        
         cx, cy = int(x1+0.5*w), int(y1+0.5*h)
-        _, point_cloud_value = point_cloud.get_value(cx,cy)
+        _, cnt_point_cloud_value = point_cloud.get_value(cx,cy)
+        # median filter
+        """
+        distance = []
+        kernel = 5
+        for dx in range(-kernel, kernel+1):
+            for dy in range(-kernel, kernel+1):
+                x = cx + dx
+                y = cy + dy
+                if (x <0) or (y<0):
+                    continue
+                depth_value = depthimg[x,y]
+
+                distance.append(depth_value)
+        distance.sort()
+        depth = distance[len(distance)//2]
+        """
+        
         obj_id = int(obj_ids[i])
         id_text = '{}'.format(int(obj_id))
         if ids2 is not None:
             id_text = id_text + ', {}'.format(int(ids2[i]))
         color = get_color(abs(obj_id))
         cv2.line(im, (cx,cy), (cx,cy), (0,0,255), 5)
-        cv2.putText(im, "depth:"+str(f"{point_cloud_value[0]: .2f} {point_cloud_value[1]: .2f} {point_cloud_value[2]: .2f}"+" mm"), (cx,cy), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+        cv2.putText(im, "depth:"+str(f"{cnt_point_cloud_value[0]: .2f} {cnt_point_cloud_value[1]: .2f} {cnt_point_cloud_value[2]: .2f}"+" mm"), (cx,cy), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
         cv2.rectangle(im, intbox[0:2], intbox[2:4], color=color, thickness=line_thickness)
         cv2.putText(im, id_text, (intbox[0], intbox[1]), cv2.FONT_HERSHEY_PLAIN, text_scale, (0, 0, 255),
                     thickness=text_thickness)

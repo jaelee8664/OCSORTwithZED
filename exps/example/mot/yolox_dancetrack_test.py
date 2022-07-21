@@ -12,18 +12,19 @@ class Exp(MyExp):
     def __init__(self):
         super(Exp, self).__init__()
         self.num_classes = 1
-        self.depth = 1.33
-        self.width = 1.25
-        # self.depth = 0.33
-        # self.width = 0.50
+        # self.depth = 1.33
+        # self.width = 1.25
+        self.depth = 0.33
+        self.width = 0.50
         self.exp_name = os.path.split(os.path.realpath(__file__))[1].split(".")[0]
         self.train_ann = "train.json"
         self.val_ann = "val.json"
         self.test_ann = "test.json"
         
-        self.input_size = (800, 1440)
-        self.test_size = (800, 1440)
-        #self.test_size = (1440,800)
+        #self.input_size = (800, 1440)
+        #self.test_size = (800, 1440)
+        self.input_size = (288, 512)
+        self.test_size = (288, 512)
         self.random_size = (18, 32)
         self.max_epoch = 8
         self.print_interval = 20

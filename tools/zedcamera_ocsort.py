@@ -85,7 +85,7 @@ def capture_thread_func(svo_filepath=None):
 
     init = sl.InitParameters(input_t=input_type)
     init.camera_resolution = sl.RESOLUTION.HD720
-    init.camera_fps = 30
+    init.camera_fps = 60
     init.depth_mode = sl.DEPTH_MODE.PERFORMANCE
     init.coordinate_units = sl.UNIT.MILLIMETER
     init.svo_real_time_mode = False
@@ -105,9 +105,10 @@ def capture_thread_func(svo_filepath=None):
     runtime.sensing_mode = sl.SENSING_MODE.STANDARD
     
     image_size = zed.get_camera_information().camera_resolution
-    # image_size.width = image_size.width/2
-    # image_size.height = image_size.height/2
-    
+    image_size.width = image_size.width / 2
+    image_size.height = image_size.height / 2
+    #image_size.width = image_size.width 
+    #image_size.height = image_size.height 
     image_zed = sl.Mat(image_size.width, image_size.height, sl.MAT_TYPE.U8_C4)
     depth_image_zed = sl.Mat(image_size.width, image_size.height, sl.MAT_TYPE.U8_C4)
     point_cloud = sl.Mat()
@@ -116,10 +117,10 @@ def capture_thread_func(svo_filepath=None):
     while not exit_signal:
         if zed.grab(runtime) == sl.ERROR_CODE.SUCCESS:
             zed.retrieve_image(image_zed, sl.VIEW.LEFT, resolution=image_size)
-            zed.retrieve_measure(depth_image_zed, sl.MEASURE.XYZRGBA, resolution=image_size)
+            #zed.retrieve_measure(depth_image_zed, sl.MEASURE.XYZRGBA, resolution=image_size)
             lock.acquire()
             image_np_global = load_image_into_numpy_array(image_zed)
-            depth_np_global = load_depth_into_numpy_array(depth_image_zed)
+            #depth_np_global = load_depth_into_numpy_array(depth_image_zed)
             #print("np global", image_np_global.shape)
             if get_cloud:
                 zed.retrieve_measure(point_cloud, sl.MEASURE.XYZRGBA, sl.MEM.CPU, image_size)
@@ -218,9 +219,12 @@ class Predictor(object):
                 outputs = self.decoder(outputs, dtype=outputs.type())
             mdl_time = time.time() - mdl_start
             pos_start = time.time()
+            #print(outputs.shape)
             outputs = postprocess(
                 outputs, self.num_classes, self.confthre, self.nmsthre
             )
+            if outputs is not None:
+                print(outputs[0].shape, len(outputs))
             pos_time = time.time() - pos_start
             print(f"preprocess time : {preproc_time} model time : {mdl_time} postprocess time : {pos_time}")
         return outputs, img_info
@@ -242,7 +246,10 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
     capture_thread.start()
 
     key = ' '
-    prevTime = 0
+    prevTime = time.time()
+    tottime = 0
+    iter = 0
+    fps = 0
     while key != 113 :
         # frame 분석 로거
         """
@@ -254,7 +261,7 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
             img_start = time.time()
             lock.acquire()
             image_ocv = np.copy(image_np_global)
-            depth_image_zed = np.copy(depth_np_global)
+            # depth_image_zed = np.copy(depth_np_global)
             new_data = False
             lock.release()
             img_time = time.time() - img_start
@@ -289,8 +296,13 @@ def depthflow_demo(predictor, vis_folder, current_time, args):
             #time.sleep(0.01)
         #print(f'img_time : {img_time} pred_time : {pred_time} oc_time : {oc_time}')
         curTime = time.time()
-        fps = int(1./(curTime - prevTime))
+        tottime += (curTime - prevTime)
+        iter += 1
+        avgtime = tottime / iter
+        fps = 1./avgtime
+        #print(fps)
         prevTime = curTime
+        
         cv2.imshow("image", online_im)
         key = cv2.waitKey(10)
     cv2.destroyAllWindows()
